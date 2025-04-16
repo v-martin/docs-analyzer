@@ -29,19 +29,19 @@ class DocumentValidator:
     def validate_page_format(self):
         try:
             from docx.shared import Mm
+            
+            a4_height = Mm(297)
+            a4_width = Mm(210)
+            left_margin_required = Mm(30)
+            right_margin_required = Mm(15)
+            right_margin_alternative = Mm(10)
+            top_margin_required = Mm(20)
+            bottom_margin_required = Mm(20)
+            
+            page_tolerance = Mm(1)
+            margin_tolerance = Mm(1)
 
             for section in self.doc.sections:
-                a4_height = Mm(297)
-                a4_width = Mm(210)
-                left_margin_required = Mm(30)
-                right_margin_required = Mm(15)
-                right_margin_alternative = Mm(10)
-                top_margin_required = Mm(20)
-                bottom_margin_required = Mm(20)
-
-                page_tolerance = Mm(5)
-                margin_tolerance = Mm(5)
-
                 if not (abs(section.page_width - a4_width) <= page_tolerance and
                         abs(section.page_height - a4_height) <= page_tolerance):
                     width_mm = round(section.page_width.mm, 1)
@@ -84,92 +84,36 @@ class DocumentValidator:
                         self.issues.append(f"Размер шрифта должен быть не менее 12 пт. Текущий: {font_size_pt} пт в тексте: '{run.text[:20]}...'")
 
     def validate_paragraphs(self):
-        from docx.shared import Cm
-
         heading_patterns = [
             r'^(СОДЕРЖАНИЕ|ВВЕДЕНИЕ|ЗАКЛЮЧЕНИЕ|ПРИЛОЖЕНИЕ|СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ|СПИСОК СОКРАЩЕНИЙ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ|ТЕРМИНЫ И ОПРЕДЕЛЕНИЯ)',
             r'^(\d+(?:\.\d+)?(?:\.\d+)*)\s+[А-ЯЁ]',
             r'^Рисунок\s+\d+(?:\.\d+)?',
             r'^Таблица\s+\d+(?:\.\d+)?',
         ]
-
-        required_indent = Cm(1.25)
-        indent_tolerance = Cm(0.05)
-
-        in_terms_section = False
-        in_abbreviations_section = False
-
+        
         for paragraph in self.doc.paragraphs:
             text = paragraph.text.strip()
             if not text:
                 continue
-
-            if "ТЕРМИНЫ И ОПРЕДЕЛЕНИЯ" in text.upper():
-                in_terms_section = True
-                in_abbreviations_section = False
-            elif "СПИСОК СОКРАЩЕНИЙ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ" in text.upper() or "СПИСОК СОКРАЩЕННЫХ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ" in text.upper():
-                in_abbreviations_section = True
-                in_terms_section = False
-            elif any(section in text.upper() for section in ["ВВЕДЕНИЕ", "СОДЕРЖАНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "ЗАКЛЮЧЕНИЕ", "ПРИЛОЖЕНИЕ"]):
-                in_terms_section = False
-                in_abbreviations_section = False
-
+                
             is_heading = False
             for pattern in heading_patterns:
                 if re.match(pattern, text, re.IGNORECASE):
                     is_heading = True
                     break
-
+                    
             is_toc_entry = '\t' in paragraph.text or text.endswith('...')
             is_list_item = text.startswith('•') or text.startswith('-') or re.match(r'^\d+\.', text)
             is_table_continuation = re.match(r'^Продолжение таблицы \d+(?:\.\d+)?', text)
-
+            
             is_justified = (paragraph.alignment == WD_ALIGN_PARAGRAPH.JUSTIFY or paragraph.alignment is None)
-
+            
             if not is_heading and not is_toc_entry and not is_list_item and not is_table_continuation and not is_justified:
                 self.issues.append(f"Основной текст должен быть выровнен по ширине. Текущее выравнивание: {paragraph.alignment} в тексте: '{text[:20]}...'")
 
-            if paragraph.paragraph_format.first_line_indent is not None:
-                try:
-                    if is_heading or is_toc_entry or is_list_item or is_table_continuation:
-                        continue
-
-                    if in_terms_section or in_abbreviations_section:
-                        continue
-
-                    if re.match(r'^[A-ZА-Я]{2,}', text) or text.startswith('где '):
-                        continue
-
-                    try:
-                        # Handle possible string or decimal values
-                        first_line_indent = paragraph.paragraph_format.first_line_indent
-                        if isinstance(first_line_indent, str):
-                            first_line_indent = Cm(float(first_line_indent))
-                        
-                        if abs(first_line_indent - required_indent) > indent_tolerance:
-                            try:
-                                current_indent = round(first_line_indent.cm, 2)
-                                self.issues.append(f"Абзацный отступ должен быть 1,25 см. Текущий: {current_indent} см в тексте: '{text[:20]}...'")
-                            except:
-                                # If can't get cm attribute
-                                self.issues.append(f"Некорректный абзацный отступ в тексте: '{text[:20]}...'")
-                    except:
-                        # If comparison fails
-                        self.issues.append(f"Невозможно проверить абзацный отступ для текста: '{text[:20]}...'")
-                    
-                except Exception as e:
-                    self.issues.append(f"Невозможно определить абзацный отступ для текста: '{text[:20]}...' ({str(e)})")
-
-            if paragraph.paragraph_format.line_spacing is not None:
-                try:
-                    line_spacing = paragraph.paragraph_format.line_spacing
-                    if isinstance(line_spacing, str):
-                        line_spacing = float(line_spacing)
-                    
-                    if not 1.4 <= line_spacing <= 1.6:
-                        self.issues.append(f"Межстрочный интервал должен быть полуторным (1.5). Текущий: {line_spacing:.1f} в тексте: '{text[:20]}...'")
-                except:
-                    self.issues.append(f"Невозможно определить межстрочный интервал для текста: '{text[:20]}...'")
+            line_spacing = paragraph.paragraph_format.line_spacing
+            if line_spacing is not None and not Pt(1.4) <= line_spacing <= Pt(1.6):
+                self.issues.append(f"Межстрочный интервал должен быть полуторным (1.5). Текущий: {str(line_spacing)} в тексте: '{text[:20]}...'")
 
     def validate_headings(self):
         headings = []
