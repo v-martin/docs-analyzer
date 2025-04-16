@@ -6,17 +6,15 @@ from docx_validator_rules import DocumentValidator
 class DocValidator:
     def __init__(self, root):
         self.root = root
-        self.root.title("DOCX Validator")
-        self.root.geometry("800x600")
+        self.root.title("Автопроверка шаблонов ВКР")
+        self.root.geometry("1440x1080")
         self.root.resizable(True, True)
         
         self.file_path = None
         
-        # Main frame
         main_frame = ttk.Frame(root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # File selection
         file_frame = ttk.Frame(main_frame)
         file_frame.pack(fill=tk.X, padx=5, pady=5)
         
@@ -29,15 +27,12 @@ class DocValidator:
         self.browse_button = ttk.Button(file_frame, text="Обзор", command=self.browse_file)
         self.browse_button.pack(side=tk.LEFT, padx=5)
         
-        # Check button
         check_button = ttk.Button(main_frame, text="Проверить документ", command=self.validate_document)
         check_button.pack(pady=10)
         
-        # Results area
         self.result_frame = ttk.LabelFrame(main_frame, text="Результаты проверки")
         self.result_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Scrollable text widget for results
         self.result_scroll = ttk.Scrollbar(self.result_frame)
         self.result_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         
@@ -46,11 +41,9 @@ class DocValidator:
         
         self.result_scroll.config(command=self.result_text.yview)
 
-        # Add progress bar
         self.progress = ttk.Progressbar(main_frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
         self.progress.pack(fill=tk.X, pady=5)
         
-        # Add status bar
         self.status_var = tk.StringVar()
         self.status_var.set("Готов к проверке документа")
         self.status_bar = ttk.Label(root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
@@ -85,16 +78,13 @@ class DocValidator:
             self.status_var.set("Проверка документа...")
             self.progress.start()
             
-            # Update UI before starting validation
             self.root.update()
             
-            # Run validation
             validator = DocumentValidator(self.file_path)
             issues = validator.validate_all()
             
             self.progress.stop()
             
-            # Display results
             if issues:
                 self.result_text.insert(tk.END, f"Найдено {len(issues)} проблем:\n\n")
                 for i, issue in enumerate(issues, 1):
@@ -103,9 +93,7 @@ class DocValidator:
             else:
                 self.result_text.insert(tk.END, "Документ соответствует всем проверенным правилам форматирования!")
                 self.status_var.set("Проверка завершена. Проблем не обнаружено.")
-            
-            self.result_text.insert(tk.END, "\nПримечание: Некоторые правила требуют дополнительного анализа и могут быть проверены не полностью.")
-            
+
         except Exception as e:
             self.progress.stop()
             messagebox.showerror("Ошибка", f"Произошла ошибка при анализе документа: {str(e)}")
