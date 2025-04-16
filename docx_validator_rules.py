@@ -66,8 +66,25 @@ class DocumentValidator:
                     self.issues.append(f"Нижнее поле должно быть 20 мм. Текущее: {bottom_mm} мм.")
 
         except Exception as e:
-            self.issues.append(f"Ошибка при проверке форматирования страницы: {str(e)}")
             self.issues.append("Пожалуйста, проверьте формат A4 (210×297 мм) и поля (левое - 30 мм, правое - 15 мм, верхнее и нижнее - 20 мм) вручную.")
+
+    def get_first_line_indent_cm(self, paragraph):
+        from docx.oxml.ns import qn
+        pPr = paragraph._p.pPr
+        if pPr is None:
+            return None
+        ind = pPr.find(qn('w:ind'))
+        if ind is None:
+            return None
+        val = ind.get(qn('w:firstLine'))
+        if val is None:
+            return None
+        try:
+            twips = float(val)
+            cm = twips * 0.0017638889
+            return round(cm, 3)
+        except ValueError:
+            return None
 
     def validate_font(self):
         for paragraph in self.doc.paragraphs:
@@ -84,6 +101,8 @@ class DocumentValidator:
                         self.issues.append(f"Размер шрифта должен быть не менее 12 пт. Текущий: {font_size_pt} пт в тексте: '{run.text[:20]}...'")
 
     def validate_paragraphs(self):
+        from docx.shared import Cm
+        
         heading_patterns = [
             r'^(СОДЕРЖАНИЕ|ВВЕДЕНИЕ|ЗАКЛЮЧЕНИЕ|ПРИЛОЖЕНИЕ|СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ|СПИСОК СОКРАЩЕНИЙ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ|ТЕРМИНЫ И ОПРЕДЕЛЕНИЯ)',
             r'^(\d+(?:\.\d+)?(?:\.\d+)*)\s+[А-ЯЁ]',
@@ -91,10 +110,26 @@ class DocumentValidator:
             r'^Таблица\s+\d+(?:\.\d+)?',
         ]
         
+        required_indent = Cm(1.25)
+        indent_tolerance = Cm(0.05)
+        
+        in_terms_section = False
+        in_abbreviations_section = False
+        
         for paragraph in self.doc.paragraphs:
             text = paragraph.text.strip()
             if not text:
                 continue
+            
+            if "ТЕРМИНЫ И ОПРЕДЕЛЕНИЯ" in text.upper():
+                in_terms_section = True
+                in_abbreviations_section = False
+            elif "СПИСОК СОКРАЩЕНИЙ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ" in text.upper() or "СПИСОК СОКРАЩЕННЫХ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ" in text.upper():
+                in_abbreviations_section = True
+                in_terms_section = False
+            elif any(section in text.upper() for section in ["ВВЕДЕНИЕ", "СОДЕРЖАНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ", "ЗАКЛЮЧЕНИЕ", "ПРИЛОЖЕНИЕ"]):
+                in_terms_section = False
+                in_abbreviations_section = False
                 
             is_heading = False
             for pattern in heading_patterns:
@@ -110,10 +145,26 @@ class DocumentValidator:
             
             if not is_heading and not is_toc_entry and not is_list_item and not is_table_continuation and not is_justified:
                 self.issues.append(f"Основной текст должен быть выровнен по ширине. Текущее выравнивание: {paragraph.alignment} в тексте: '{text[:20]}...'")
-
-            line_spacing = paragraph.paragraph_format.line_spacing
-            if line_spacing is not None and not Pt(1.4) <= line_spacing <= Pt(1.6):
-                self.issues.append(f"Межстрочный интервал должен быть полуторным (1.5). Текущий: {str(line_spacing)} в тексте: '{text[:20]}...'")
+            
+            if is_heading or is_toc_entry or is_list_item or is_table_continuation:
+                pass
+            elif in_terms_section or in_abbreviations_section:
+                pass
+            elif re.match(r'^[A-ZА-Я]{2,}', text) or text.startswith('где '):
+                pass
+            else:
+                current_indent = self.get_first_line_indent_cm(paragraph)
+                if Cm(current_indent) < Cm(1.24) or Cm(current_indent) > Cm(1.26):
+                    self.issues.append(f"Абзацный отступ должен быть 1,25 см. Текущий: {current_indent} см в тексте: '{text[:20]}...'")
+            
+            try:
+                if not is_heading and not is_toc_entry and not is_list_item and not is_table_continuation:
+                    if hasattr(paragraph, 'paragraph_format') and hasattr(paragraph.paragraph_format, 'line_spacing'):
+                        line_spacing = paragraph.paragraph_format.line_spacing
+                        if line_spacing is not None and not 1.4 <= line_spacing <= 1.6:
+                            self.issues.append(f"Межстрочный интервал должен быть полуторным (1.5). Текущий: {str(line_spacing)} в тексте: '{text[:20]}...'")
+            except Exception as e:
+                pass
 
     def validate_headings(self):
         headings = []
@@ -349,42 +400,58 @@ class DocumentValidator:
                     self.issues.append(f"Формула '{text[:30]}...' должна иметь номер в скобках в конце строки.")
 
     def validate_references(self):
-        has_references_section = False
+        required_headings = [
+            "СОДЕРЖАНИЕ",
+            "ВВЕДЕНИЕ", 
+            "ЗАКЛЮЧЕНИЕ", 
+            "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ",
+            "СПИСОК СОКРАЩЕНИЙ И УСЛОВНЫХ ОБОЗНАЧЕНИЙ",
+            "ТЕРМИНЫ И ОПРЕДЕЛЕНИЯ",
+        ]
+        
+        found_headings = {heading: False for heading in required_headings}
+        
+        for paragraph in self.doc.paragraphs:
+            text = paragraph.text.strip().upper()
+            for heading in required_headings:
+                if heading in text:
+                    found_headings[heading] = True
+        
+        for heading in required_headings:
+            if not found_headings[heading]:
+                self.issues.append(f"Не найден раздел '{heading}'.")
+        
         references_paragraphs = []
         in_references_section = False
-
+        
         for paragraph in self.doc.paragraphs:
             if "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ" in paragraph.text.upper():
-                has_references_section = True
                 in_references_section = True
                 continue
-
+            
             if in_references_section and paragraph.text.strip() and any(
-                section in paragraph.text.upper()
+                section in paragraph.text.upper() 
                 for section in ["ПРИЛОЖЕНИЕ", "СПИСОК СОКРАЩЕНИЙ", "ТЕРМИНЫ И ОПРЕДЕЛЕНИЯ"]
             ):
                 in_references_section = False
-
+            
             if in_references_section and paragraph.text.strip():
                 references_paragraphs.append(paragraph)
-
-        if not has_references_section:
-            self.issues.append("Не найден раздел 'СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ'.")
-            return
-
+        
+        # Skip validation if there are no references
         if not references_paragraphs:
             return
-
+        
         for i, paragraph in enumerate(references_paragraphs, 1):
             text = paragraph.text.strip()
-
+            
             has_proper_numbering = False
-
+            
             if hasattr(paragraph, '_p'):
                 p_xml = paragraph._p.xml
                 if '<w:numPr>' in p_xml and '<w:numId' in p_xml:
                     has_proper_numbering = True
-
+            
             if not has_proper_numbering:
                 num_match = re.match(r'^\s*(\d+(?:\.\d+)?)[\.\s]', text)
                 if num_match:
@@ -397,14 +464,14 @@ class DocumentValidator:
                 else:
                     if not ('http' in text or '[Электронный ресурс]' in text):
                         self.issues.append(f"Источник '{text[:50]}...' должен иметь номер {i}.")
-
+            
             has_citation = False
             citation_pattern = r"\[\s*" + str(i) + r"\s*\]"
             for p in self.doc.paragraphs:
                 if re.search(citation_pattern, p.text):
                     has_citation = True
                     break
-
+            
             if not has_citation and len(text) > 3:
                 self.issues.append(f"На источник #{i} нет ссылки в тексте. На все источники должны быть ссылки.")
 
