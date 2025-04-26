@@ -1,10 +1,9 @@
 from docx import Document
-from docx.shared import Pt, Mm, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import re
 
-class DocumentValidator:
 
+class DocumentValidator:
     def __init__(self, doc_path):
         self.doc_path = doc_path
         self.doc = Document(doc_path)
@@ -86,8 +85,76 @@ class DocumentValidator:
         except ValueError:
             return None
 
+    def get_line_spacing_value(self, paragraph):
+        from docx.oxml.ns import qn
+        
+        pPr = paragraph._p.pPr
+        if pPr is not None:
+            spacing = pPr.find(qn('w:spacing'))
+            if spacing is not None:
+                line_val = spacing.get(qn('w:line'))
+                line_rule = spacing.get(qn('w:lineRule'))
+                
+                if line_val is not None:
+                    try:
+                        line_val = float(line_val)
+                        
+                        if line_rule is None:
+                            line_rule = 'auto'
+                            
+                        if line_rule == 'auto':
+                            line_spacing = line_val / 240.0
+                            return line_spacing, line_rule
+                        else:
+                            points = line_val / 20.0
+                            if points / 12.0 > 1.2:
+                                line_spacing = points / 12.0
+                            else:
+                                line_spacing = 1.0
+                            return line_spacing, line_rule
+                    except (ValueError, TypeError):
+                        pass
+        
+        try:
+            line_spacing = paragraph.paragraph_format.line_spacing
+            if line_spacing is not None:
+                if 1.4 <= line_spacing <= 1.6:
+                    return 1.5, 'auto'
+                elif 1.9 <= line_spacing <= 2.1:
+                    return 2.0, 'auto'
+                elif 0.9 <= line_spacing <= 1.1:
+                    return 1.0, 'auto'
+                else:
+                    return line_spacing, 'auto'
+                    
+            line_rule = paragraph.paragraph_format.line_spacing_rule
+            if line_rule is not None:
+                from docx.enum.text import WD_LINE_SPACING
+                if line_rule == WD_LINE_SPACING.ONE_POINT_FIVE:
+                    return 1.5, 'auto'
+                elif line_rule == WD_LINE_SPACING.DOUBLE:
+                    return 2.0, 'auto'
+                elif line_rule == WD_LINE_SPACING.SINGLE:
+                    return 1.0, 'auto'
+        except:
+            pass
+            
+        try:
+            if paragraph.style:
+                style_name = paragraph.style.name
+                if "полуторный" in style_name.lower() or "1.5" in style_name:
+                    return 1.5, 'auto'
+                elif "двойной" in style_name.lower() or "2.0" in style_name or "double" in style_name.lower():
+                    return 2.0, 'auto'
+                elif "одинарный" in style_name.lower() or "1.0" in style_name or "single" in style_name.lower():
+                    return 1.0, 'auto'
+        except:
+            pass
+            
+        return 1.0, 'auto'
+
     def validate_font(self):
-        for paragraph in self.doc.paragraphs:
+        for paragraph in list(filter(lambda x: x != '', self.doc.paragraphs)):
             if not paragraph.text.strip():
                 continue
 
@@ -110,13 +177,10 @@ class DocumentValidator:
             r'^Таблица\s+\d+(?:\.\d+)?',
         ]
         
-        required_indent = Cm(1.25)
-        indent_tolerance = Cm(0.05)
-        
         in_terms_section = False
         in_abbreviations_section = False
         
-        for paragraph in self.doc.paragraphs:
+        for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
             text = paragraph.text.strip()
             if not text:
                 continue
@@ -154,17 +218,22 @@ class DocumentValidator:
                 pass
             else:
                 current_indent = self.get_first_line_indent_cm(paragraph)
-                if Cm(current_indent) < Cm(1.24) or Cm(current_indent) > Cm(1.26):
-                    self.issues.append(f"Абзацный отступ должен быть 1,25 см. Текущий: {current_indent} см в тексте: '{text[:20]}...'")
-            
-            try:
+                if current_indent is None or (Cm(current_indent) < Cm(1.24) or Cm(current_indent) > Cm(1.26)):
+                    self.issues.append(f"Абзацный отступ должен быть 1,25 см. Текущий: {current_indent if current_indent is not None else 0} см в тексте: '{text[:20]}...'")
+
                 if not is_heading and not is_toc_entry and not is_list_item and not is_table_continuation:
-                    if hasattr(paragraph, 'paragraph_format') and hasattr(paragraph.paragraph_format, 'line_spacing'):
-                        line_spacing = paragraph.paragraph_format.line_spacing
-                        if line_spacing is not None and not 1.4 <= line_spacing <= 1.6:
-                            self.issues.append(f"Межстрочный интервал должен быть полуторным (1.5). Текущий: {str(line_spacing)} в тексте: '{text[:20]}...'")
-            except Exception as e:
-                pass
+                    try:
+                        line_spacing, line_rule = self.get_line_spacing_value(paragraph)
+                        
+                        if not (1.4 <= line_spacing <= 1.6):
+                            if line_rule == 'auto':
+                                rule_text = "множитель"
+                            else:
+                                rule_text = "точно"
+                                
+                            self.issues.append(f"Межстрочный интервал должен быть полуторным (1.5). Текущий: {line_spacing:.2f} ({rule_text}) в тексте: '{text[:20]}...'")
+                    except Exception as e:
+                        pass
 
     def validate_headings(self):
         headings = []
@@ -175,7 +244,7 @@ class DocumentValidator:
             (r'^(\d+\.\d+\.\d+)\s+[А-ЯЁ]', 3)
         ]
 
-        for paragraph in self.doc.paragraphs:
+        for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
             text = paragraph.text.strip()
             if not text:
                 continue
@@ -198,16 +267,6 @@ class DocumentValidator:
             else:
                 if text.endswith('.'):
                     self.issues.append(f"Заголовок '{text}' не должен оканчиваться точкой.")
-
-                if paragraph.runs:
-                    is_bold = True
-                    for run in paragraph.runs:
-                        if run.text.strip() and not run.bold:
-                            is_bold = False
-                            break
-
-                    if not is_bold:
-                        self.issues.append(f"Заголовок '{text}' должен быть выделен полужирным шрифтом.")
 
                 if level == 1:
                     try:
@@ -266,13 +325,12 @@ class DocumentValidator:
         table_numbers = {}
         table_captions = []
 
-        for paragraph in self.doc.paragraphs:
+        for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
             text = paragraph.text.strip()
             if text.startswith("Таблица "):
                 match = re.match(r"^Таблица\s+(\d+(?:\.\d+)?)", text)
                 if match:
                     try:
-                        # Convert to float first, then to int to handle both integers and decimals
                         table_num = int(float(match.group(1)))
                         if table_num not in table_numbers:
                             table_numbers[table_num] = []
@@ -284,7 +342,6 @@ class DocumentValidator:
                 match = re.match(r"^Продолжение таблицы\s+(\d+(?:\.\d+)?)", text)
                 if match:
                     try:
-                        # Convert to float first, then to int to handle both integers and decimals
                         table_num = int(float(match.group(1)))
                         if table_num not in table_numbers:
                             table_numbers[table_num] = []
@@ -321,7 +378,7 @@ class DocumentValidator:
             has_reference = False
             ref_pattern = r'таблиц[аеуыи]?\s+' + str(table_num) + r'\b'
 
-            for paragraph in self.doc.paragraphs:
+            for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
                 if re.search(ref_pattern, paragraph.text, re.IGNORECASE):
                     has_reference = True
                     break
@@ -333,7 +390,7 @@ class DocumentValidator:
         figure_captions = []
         caption_paragraphs = []
 
-        for paragraph in self.doc.paragraphs:
+        for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
             if re.match(r'^Рисунок\s+\d+', paragraph.text.strip()):
                 figure_captions.append(paragraph.text.strip())
                 caption_paragraphs.append(paragraph)
@@ -351,7 +408,6 @@ class DocumentValidator:
             match = re.search(r'Рисунок\s+(\d+(?:\.\d+)?)', caption)
             if match:
                 try:
-                    # Convert to float first, then to int to handle both integers and decimals
                     number = int(float(match.group(1)))
                     if number != i:
                         self.issues.append(f"Нарушена последовательность нумерации рисунков. Рисунок с подписью '{caption}' имеет номер {number}, ожидается {i}.")
@@ -411,7 +467,7 @@ class DocumentValidator:
         
         found_headings = {heading: False for heading in required_headings}
         
-        for paragraph in self.doc.paragraphs:
+        for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
             text = paragraph.text.strip().upper()
             for heading in required_headings:
                 if heading in text:
@@ -438,7 +494,6 @@ class DocumentValidator:
             if in_references_section and paragraph.text.strip():
                 references_paragraphs.append(paragraph)
         
-        # Skip validation if there are no references
         if not references_paragraphs:
             return
         
@@ -467,7 +522,7 @@ class DocumentValidator:
             
             has_citation = False
             citation_pattern = r"\[\s*" + str(i) + r"\s*\]"
-            for p in self.doc.paragraphs:
+            for p in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
                 if re.search(citation_pattern, p.text):
                     has_citation = True
                     break
@@ -478,7 +533,7 @@ class DocumentValidator:
     def validate_appendices(self):
         try:
             has_appendices = False
-            for paragraph in self.doc.paragraphs:
+            for paragraph in list(filter(lambda x: x.text != '', self.doc.paragraphs)):
                 if paragraph.text.strip().startswith("Приложение "):
                     has_appendices = True
                     if not paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER:
