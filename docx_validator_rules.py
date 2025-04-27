@@ -281,8 +281,9 @@ class DocumentValidator:
     def validate_page_numbering(self):
         try:
             has_page_numbers = False
+            page_numbers_start_on_third_page = False
 
-            for section in self.doc.sections:
+            for section_index, section in enumerate(self.doc.sections):
                 if hasattr(section, 'footer') and section.footer and section.footer.paragraphs:
                     footer_paragraphs = section.footer.paragraphs
 
@@ -291,6 +292,9 @@ class DocumentValidator:
                         for p in footer_paragraphs:
                             if p.text.strip() and p.alignment not in (WD_ALIGN_PARAGRAPH.CENTER, None):
                                 self.issues.append("Номера страниц должны быть размещены в центре нижней части страницы.")
+                        
+                        if section_index >= 2:
+                            page_numbers_start_on_third_page = True
                         break
 
                     for p in footer_paragraphs:
@@ -298,22 +302,34 @@ class DocumentValidator:
                             xml_str = p._p.xml
                             if 'PAGE' in xml_str or 'w:fldChar' in xml_str:
                                 has_page_numbers = True
+                                
+                                if section_index >= 2:
+                                    page_numbers_start_on_third_page = True
                                 break
 
             if not has_page_numbers:
-                for paragraph in self.doc.paragraphs:
+                for i, paragraph in enumerate(self.doc.paragraphs):
+                    approx_page = (i // 20) + 1
+                    
                     if "PAGE" in paragraph.text or "NUMPAGES" in paragraph.text:
                         has_page_numbers = True
+                        if approx_page >= 3:
+                            page_numbers_start_on_third_page = True
                         break
 
                     if hasattr(paragraph, '_p') and paragraph._p is not None:
                         xml_str = paragraph._p.xml
                         if 'PAGE' in xml_str or 'w:fldChar' in xml_str:
                             has_page_numbers = True
+                            if approx_page >= 3:
+                                page_numbers_start_on_third_page = True
                             break
-
+            
             if not has_page_numbers and len(list(self.doc.paragraphs)) > 20:
                 self.issues.append("Ошибка в нумерации страниц. Номера должны быть в центре нижней части страницы.")
+            
+            if has_page_numbers and not page_numbers_start_on_third_page:
+                self.issues.append("Нумерация страниц должна начинаться с третьей страницы.")
 
         except Exception as e:
             pass
